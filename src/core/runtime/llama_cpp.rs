@@ -156,13 +156,25 @@ impl RuntimeBackend for LlamaCppBackend {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let tmpl = model
-            .chat_template(None)
-            .map_err(|e| anyhow::anyhow!("Failed to get chat template: {}", e))?;
-
-        let prompt = model
-            .apply_chat_template(&tmpl, &llama_messages, true)
-            .context("Failed to apply chat template")?;
+        // Try to use chat template, fall back to simple format if not available
+        let prompt = match model.chat_template(None) {
+            Ok(tmpl) => model
+                .apply_chat_template(&tmpl, &llama_messages, true)
+                .context("Failed to apply chat template")?,
+            Err(_) => {
+                // Fallback: simple prompt format for models without chat template
+                let mut prompt = String::new();
+                for msg in messages {
+                    match msg.role.as_str() {
+                        "system" => prompt.push_str(&format!("{}\n\n", msg.content)),
+                        "user" => prompt.push_str(&format!("User: {}\nAssistant: ", msg.content)),
+                        "assistant" => prompt.push_str(&format!("{}\n", msg.content)),
+                        _ => prompt.push_str(&format!("{}: {}\n", msg.role, msg.content)),
+                    }
+                }
+                prompt
+            }
+        };
 
         self.generate(&prompt, config).await
     }

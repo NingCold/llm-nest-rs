@@ -22,13 +22,19 @@
 # cargo 不在默认 PATH 中，需要先 source
 source ~/.cargo/env
 
-# 构建（默认不含推理功能）
+# 构建 CLI（默认）
 cargo build
+
+# 构建纯库（不含 CLI）
+cargo build --no-default-features
 
 # 构建含推理功能（需要 libclang-dev 系统依赖）
 cargo build --features runtime
 
-# 运行
+# 构建供 Tauri UI 使用（无 CLI，有推理）
+cargo build --no-default-features --features runtime
+
+# 运行 CLI
 cargo run
 
 # 测试
@@ -41,6 +47,18 @@ cargo clippy && cargo fmt
 cargo clippy && cargo test && cargo fmt --check
 ```
 
+## Feature Flags
+
+- `default` = `["cli"]`：包含 CLI 功能
+- `cli`：CLI 命令（clap）和 HTTP 服务器（actix-web）
+- `runtime`：启用 llama.cpp 推理后端（需要 `libclang-dev`）
+
+**构建组合：**
+- `cargo build` — CLI 工具（默认）
+- `cargo build --no-default-features` — 纯库（仅模型管理）
+- `cargo build --features runtime` — CLI + 推理
+- `cargo build --no-default-features --features runtime` — 纯库 + 推理（Tauri 推荐）
+
 ## 依赖注意事项
 
 - `reqwest` 必须使用 `rustls-tls` feature，避免 OpenSSL 系统依赖问题
@@ -48,12 +66,101 @@ cargo clippy && cargo test && cargo fmt --check
   reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
   ```
 - `llama-cpp-2` 是可选依赖（feature `runtime`），需要系统安装 `libclang-dev`
-- 保持依赖少，优先标准库
+- `clap` 和 `actix-web` 是可选依赖（feature `cli`），纯库使用时不需要
 
-## Feature Flags
+## 架构设计
 
-- `default`：仅模型管理和 Hub 功能
-- `runtime`：启用 llama.cpp 推理后端（需要 `libclang-dev`）
+### 双重用途：CLI + 库
+
+项目既可以作为独立 CLI 工具，也可以作为 Rust 库被其他项目（如 Tauri UI）调用。
+
+**Tauri UI 集成方式：**
+```toml
+# src-tauri/Cargo.toml
+[dependencies]
+llm-nest-rs = { path = "../../llm-nest-rs", default-features = false, features = ["runtime"] }
+```
+- 排除 `cli`（无 actix-web/clap 依赖）
+- 包含 `runtime`（支持推理）
+- 使用 `LlmNest` 管理模型，`LlmRuntime` 进行推理
+
+```
+llm-nest-rs/
+├── src/
+│   ├── lib.rs      # 库入口，暴露 api、core、hub 等模块
+│   ├── main.rs     # CLI 入口（需要 cli feature）
+│   ├── api.rs      # 公共 API 层（推荐外部使用）
+│   ├── core/       # 核心业务逻辑
+│   ├── hub/        # HuggingFace Hub 集成
+│   ├── cli/        # CLI 命令（仅 cli feature）
+│   └── config/     # 配置与 i18n
+```
+
+### 公共 API（推荐外部使用）
+
+两个核心结构体：
+- `LlmNest` — 模型管理（无需 feature）
+- `LlmRuntime` — 推理（需要 `runtime` feature）
+
+```rust
+// 1. 模型管理（无需 feature）
+use llm_nest_rs::api::LlmNest;
+
+let mut app = LlmNest::new()?;
+let models = app.list_models();
+let model = app.get_model("model-name");
+app.delete_model("model-name")?;
+
+// Hub 操作
+let results = app.search_hub("llama", 10).await?;
+app.download_model("repo-id", "file.gguf", None).await?;
+
+// 2. 推理（需要 runtime feature）
+use llm_nest_rs::api::LlmRuntime;
+
+let mut rt = LlmRuntime::new();
+rt.load_model(&model.path).await?;
+
+// 单次生成
+let response = rt.generate("Hello").await?;
+
+// 聊天
+let messages = vec![ChatMessage { role: "user".into(), content: "Hello".into() }];
+let response = rt.chat(&messages).await?;
+
+// 流式生成
+let stream = rt.chat_stream(&messages).await?;
+```
+
+### 直接使用内部模块
+
+```rust
+use llm_nest_rs::core::registry::manager::ModelRegistry;
+use llm_nest_rs::core::models::model_info::ModelInfo;
+use llm_nest_rs::hub::search::search_gguf;
+```
+
+## 目录结构
+
+```
+src/
+├── lib.rs              # 库入口
+├── main.rs             # CLI 入口
+├── api.rs              # 公共 API 层
+├── cli/                # CLI 命令（feature-gated）
+│   ├── app.rs          # CLI 定义
+│   ├── context.rs      # CliContext
+│   ├── commands/       # 命令实现
+│   └── ui/             # 输出格式化
+├── core/               # 业务逻辑
+│   ├── models/         # 模型数据类型、GGUF 解析
+│   ├── runtime/        # 推理后端（feature-gated）
+│   ├── storage/        # 文件系统操作
+│   └── registry/       # 模型注册表
+├── hub/                # HuggingFace Hub 集成
+├── config/             # 配置与 i18n
+└── utils/              # 工具函数
+```
 
 ## 架构原则（从 Python 版本继承）
 
@@ -63,26 +170,6 @@ cargo clippy && cargo test && cargo fmt --check
 - Runtime 抽象必须 Backend-Agnostic，不让 llama.cpp 细节污染架构
 - 错误不静默吞掉，要给出可操作提示
 - 使用 `anyhow` 进行错误处理，`thiserror` 定义自定义错误类型
-
-## 目录结构
-
-```
-src/
-├── main.rs              # 入口点
-├── cli/                 # CLI 命令（clap）
-│   ├── app.rs           # CLI 定义
-│   ├── context.rs       # CliContext
-│   ├── commands/        # 命令实现
-│   └── ui/              # 输出格式化
-├── core/                # 业务逻辑
-│   ├── models/          # 模型数据类型、GGUF 解析
-│   ├── runtime/         # 推理后端（feature-gated）
-│   ├── storage/         # 文件系统操作
-│   └── registry/        # 模型注册表
-├── hub/                 # HuggingFace Hub 集成
-├── config/              # 配置与 i18n
-└── utils/               # 工具函数
-```
 
 ## 测试
 

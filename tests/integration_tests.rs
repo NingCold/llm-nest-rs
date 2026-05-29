@@ -149,3 +149,45 @@ fn test_hub_model_result() {
     assert_eq!(result.display_name(), "TheBloke/test/model.Q4_K_M.gguf");
     assert!((result.size_gb() - 1.0).abs() < 0.01);
 }
+
+#[test]
+fn test_api_llm_nest_creation() {
+    use llm_nest_rs::api::LlmNest;
+
+    let app = LlmNest::new();
+    assert!(app.is_ok(), "Failed to create LlmNest: {:?}", app.err());
+}
+
+#[test]
+fn test_api_list_models() {
+    use llm_nest_rs::api::LlmNest;
+
+    let app = LlmNest::new().unwrap();
+    let models = app.list_models();
+    // Should return empty vec or actual models, not panic
+    println!("Found {} models", models.len());
+}
+
+#[test]
+fn test_api_get_model_not_found() {
+    use llm_nest_rs::api::LlmNest;
+
+    let app = LlmNest::new().unwrap();
+    let result = app.get_model("nonexistent-model-12345");
+    assert!(result.is_none());
+}
+
+#[test]
+fn test_api_model_summary_fields() {
+    use llm_nest_rs::api::LlmNest;
+
+    let app = LlmNest::new().unwrap();
+    let models = app.list_models();
+
+    if let Some(model) = models.first() {
+        assert!(!model.name.is_empty());
+        assert!(model.size_gb >= 0.0);
+        assert!(!model.quant_type.is_empty());
+        assert!(!model.status.is_empty());
+    }
+}
