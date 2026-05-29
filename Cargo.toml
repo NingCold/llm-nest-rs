@@ -1,0 +1,48 @@
+[package]
+name = "llm-nest-rs"
+version = "0.1.0"
+edition = "2024"
+description = "Local LLM runtime and GGUF model management tool"
+
+[[bin]]
+name = "llmn"
+path = "src/main.rs"
+
+[features]
+default = []
+runtime = ["dep:llama-cpp-2", "dep:encoding_rs"]
+
+[dependencies]
+# CLI
+clap = { version = "4.5", features = ["derive"] }
+
+# 序列化
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# 异步运行时
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+futures = "0.3"
+
+# HTTP 客户端（Hub 集成）
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+
+# HTTP 服务器（API serve）
+actix-web = "4"
+actix-rt = "2"
+
+# llama.cpp 绑定（可选，需要 libclang）
+llama-cpp-2 = { version = "0.1", optional = true }
+
+# 错误处理
+anyhow = "1.0"
+thiserror = "2.0"
+
+# 工具
+dirs = "6.0"
+chrono = { version = "0.4", features = ["serde"] }
+byteorder = "1.5"
+uuid = { version = "1.0", features = ["v4"] }
+encoding_rs = { version = "0.8", optional = true }
+async-stream = "0.3"
